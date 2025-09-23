@@ -447,14 +447,13 @@ async def get_sector_performance() -> Dict[str, Any]:
 
 # Helper functions for new endpoints
 async def _get_trending_symbols(region: str, count: int) -> List[Dict[str, Any]]:
-    """Get trending symbols for a region"""
+    """Get trending symbols - using popular symbols since yfinance trending is not available"""
     try:
-        # For demo purposes, return some popular symbols
-        # In a real implementation, you'd use yfinance's trending functionality
+        # Use popular symbols by region since yfinance.search doesn't work as expected
         trending_symbols = {
-            "US": ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "NFLX", "CRM", "UBER"],
-            "GB": ["LLOY.L", "BP.L", "SHEL.L", "AZN.L", "GLEN.L", "GSK.L", "ULVR.L", "DGE.L", "NG.L", "RTO.L"],
-            "CA": ["SHOP.TO", "CNR.TO", "RY.TO", "TD.TO", "BNS.TO", "BMO.TO", "ENB.TO", "CNQ.TO", "SU.TO", "TRP.TO"]
+            "US": ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "NFLX"],
+            "GB": ["LLOY.L", "BP.L", "SHEL.L", "AZN.L"],
+            "CA": ["SHOP.TO", "CNR.TO", "RY.TO", "TD.TO"]
         }
         
         available_symbols = trending_symbols.get(region, trending_symbols["US"])
@@ -462,18 +461,15 @@ async def _get_trending_symbols(region: str, count: int) -> List[Dict[str, Any]]
         result = []
         
         for symbol in symbols:
-            try:
-                info = await yahoo_manager.get_info_with_retry(symbol)
-                if info:
-                    result.append({
-                        "symbol": symbol,
-                        "name": info.get("shortName", symbol),
-                        "price": info.get("regularMarketPrice"),
-                        "change": info.get("regularMarketChange"),
-                        "changePercent": info.get("regularMarketChangePercent")
-                    })
-            except:
-                continue
+            info = await yahoo_manager.get_info_with_retry(symbol)
+            if info and info.get("regularMarketPrice"):
+                result.append({
+                    "symbol": symbol,
+                    "name": info.get("shortName", symbol),
+                    "price": info.get("regularMarketPrice"),
+                    "change": info.get("regularMarketChange"),
+                    "changePercent": info.get("regularMarketChangePercent")
+                })
                 
         return result
     except Exception as e:
@@ -482,35 +478,33 @@ async def _get_trending_symbols(region: str, count: int) -> List[Dict[str, Any]]
 
 
 async def _get_market_movers(mover_type: str, count: int) -> List[Dict[str, Any]]:
-    """Get market movers (gainers, losers, most active)"""
+    """Get market movers - real data from yfinance, categorized by typical performance"""
     try:
-        # Sample symbols for each category
-        symbol_lists = {
-            "gainers": ["NVDA", "GOOGL", "MSFT", "AAPL", "AMZN", "META", "TSLA", "NFLX", "CRM", "AMD"],
-            "losers": ["PYPL", "INTC", "BA", "DIS", "UBER", "LYFT", "SPOT", "ZOOM", "PTON", "RIVN"],
-            "most_active": ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "GOOGL", "SPY", "QQQ", "NFLX"]
-        }
+        # Use real symbols and get actual data - let real market data determine gainers/losers
+        popular_symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "NFLX", "AMD", "CRM"]
         
-        available_symbols = symbol_lists.get(mover_type, symbol_lists["gainers"])
-        symbols = available_symbols[:count] if count <= len(available_symbols) else available_symbols
         result = []
+        for symbol in popular_symbols:
+            info = await yahoo_manager.get_info_with_retry(symbol)
+            if info and info.get("regularMarketPrice"):
+                result.append({
+                    "symbol": symbol,
+                    "name": info.get("shortName", symbol),
+                    "price": info.get("regularMarketPrice"),
+                    "change": info.get("regularMarketChange"),
+                    "changePercent": info.get("regularMarketChangePercent"),
+                    "volume": info.get("regularMarketVolume")
+                })
         
-        for symbol in symbols:
-            try:
-                info = await yahoo_manager.get_info_with_retry(symbol)
-                if info:
-                    result.append({
-                        "symbol": symbol,
-                        "name": info.get("shortName", symbol),
-                        "price": info.get("regularMarketPrice"),
-                        "change": info.get("regularMarketChange"),
-                        "changePercent": info.get("regularMarketChangePercent"),
-                        "volume": info.get("regularMarketVolume")
-                    })
-            except:
-                continue
+        # Sort by actual performance
+        if mover_type == "gainers":
+            result.sort(key=lambda x: x.get("changePercent", -999), reverse=True)
+        elif mover_type == "losers":
+            result.sort(key=lambda x: x.get("changePercent", 999))
+        elif mover_type == "most_active":
+            result.sort(key=lambda x: x.get("volume", 0), reverse=True)
                 
-        return result
+        return result[:count]
     except Exception as e:
         print(f"Error getting market movers: {e}")
         return []
@@ -797,23 +791,10 @@ async def _compare_stocks_async(symbols: List[str], metrics: List[str]) -> List[
 
 
 def _get_sector_performance() -> List[Dict[str, Any]]:
-    """Get sector performance data"""
-    # Sample sector data - in production, you'd get this from a proper source
-    sectors = [
-        {"name": "Technology", "change": 2.5, "volume": 1500000000},
-        {"name": "Healthcare", "change": 1.2, "volume": 800000000},
-        {"name": "Financial", "change": -0.8, "volume": 1200000000},
-        {"name": "Consumer Discretionary", "change": 0.9, "volume": 900000000},
-        {"name": "Energy", "change": -1.5, "volume": 600000000},
-        {"name": "Utilities", "change": 0.3, "volume": 300000000},
-        {"name": "Materials", "change": -0.2, "volume": 400000000},
-        {"name": "Industrials", "change": 0.7, "volume": 700000000},
-        {"name": "Consumer Staples", "change": 0.1, "volume": 500000000},
-        {"name": "Real Estate", "change": -0.4, "volume": 250000000},
-        {"name": "Communication Services", "change": 1.8, "volume": 1100000000}
-    ]
-    
-    return sectors
+    """Get sector performance data - currently not available through yfinance"""
+    # yfinance doesn't provide sector data directly
+    # This would need to be implemented with another data source
+    return []
 
 
 async def _load_quotes_async(symbols: List[str]) -> List[Dict[str, Any]]:
@@ -882,47 +863,55 @@ def _load_quotes(symbols: List[str]) -> List[Dict[str, Any]]:
 
 
 def _search_quotes(query: str, limit: int) -> Dict[str, Any]:
+    """Search for quotes - simplified since yfinance search is not reliable"""
     try:
-        # Try to use yfinance search if available
-        if hasattr(yf, "search") and callable(yf.search):
-            payload = yf.search(query)
-            quotes = payload.get("quotes", [])[:limit]
-            news = payload.get("news", [])
-            total = payload.get("total", len(quotes))
-        else:
-            # Fallback: return mock search results based on common symbols
-            common_symbols = {
-                "apple": [{"symbol": "AAPL", "shortname": "Apple Inc.", "longname": "Apple Inc.", "exchDisp": "NASDAQ", "typeDisp": "Equity", "quoteType": "EQUITY"}],
-                "microsoft": [{"symbol": "MSFT", "shortname": "Microsoft Corporation", "longname": "Microsoft Corporation", "exchDisp": "NASDAQ", "typeDisp": "Equity", "quoteType": "EQUITY"}],
-                "google": [{"symbol": "GOOGL", "shortname": "Alphabet Inc.", "longname": "Alphabet Inc. (Google)", "exchDisp": "NASDAQ", "typeDisp": "Equity", "quoteType": "EQUITY"}],
-                "amazon": [{"symbol": "AMZN", "shortname": "Amazon.com, Inc.", "longname": "Amazon.com, Inc.", "exchDisp": "NASDAQ", "typeDisp": "Equity", "quoteType": "EQUITY"}],
-                "tesla": [{"symbol": "TSLA", "shortname": "Tesla, Inc.", "longname": "Tesla, Inc.", "exchDisp": "NASDAQ", "typeDisp": "Equity", "quoteType": "EQUITY"}]
-            }
-            
-            query_lower = query.lower()
-            quotes = []
-            for key, symbols in common_symbols.items():
-                if key in query_lower or query_lower in key:
-                    quotes.extend(symbols)
-            
-            quotes = quotes[:limit]
-            news = []
-            total = len(quotes)
+        # Simple mapping for common searches since yf.search doesn't work reliably
+        search_mappings = {
+            "apple": "AAPL",
+            "microsoft": "MSFT", 
+            "google": "GOOGL",
+            "alphabet": "GOOGL",
+            "amazon": "AMZN",
+            "tesla": "TSLA",
+            "meta": "META",
+            "facebook": "META",
+            "netflix": "NFLX",
+            "nvidia": "NVDA"
+        }
+        
+        query_lower = query.lower()
+        matches = []
+        
+        # Check if query matches any known companies
+        for company, symbol in search_mappings.items():
+            if company in query_lower or query_lower in company:
+                matches.append(symbol)
+        
+        # Also check if query is already a symbol
+        if query.upper() not in matches:
+            matches.append(query.upper())
+        
+        quotes = []
+        for symbol in matches[:limit]:
+            try:
+                ticker = yf.Ticker(symbol)
+                info = ticker.info
+                if info and info.get("symbol"):
+                    quotes.append({
+                        "symbol": info.get("symbol", symbol),
+                        "shortname": info.get("shortName", ""),
+                        "longname": info.get("longName", ""),
+                        "exchDisp": info.get("exchange", ""),
+                        "typeDisp": "Equity",
+                        "quoteType": "EQUITY"
+                    })
+            except:
+                continue
         
         return {
-            "quotes": [
-                {
-                    "symbol": item.get("symbol"),
-                    "shortname": item.get("shortname"),
-                    "longname": item.get("longname"),
-                    "exchDisp": item.get("exchDisp"),
-                    "typeDisp": item.get("typeDisp"),
-                    "quoteType": item.get("quoteType"),
-                }
-                for item in quotes
-            ],
-            "news": news,
-            "total": total,
+            "quotes": quotes,
+            "news": [],
+            "total": len(quotes)
         }
     except Exception as e:
         print(f"Search error: {e}")
