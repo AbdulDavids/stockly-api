@@ -59,13 +59,24 @@ uvicorn main:app --host 0.0.0.0 --port $PORT
 
 ## Rate Limiting Features
 
-- **Smart Rate Limiting**: 1 request per second to Yahoo Finance
-- **Intelligent Caching**: 5-minute cache for all API responses
+- **Smart Rate Limiting**: 1 request per second to Yahoo Finance (configurable)
+- **Intelligent Caching**: 5-minute cache for all API responses (configurable)
 - **Retry Logic**: Automatic retry with exponential backoff for failed requests
 - **Error Handling**: Graceful handling of API limits and network issues
+- **Container Ready**: Proper cache configuration for Docker/containerized deployments
 
 ## Performance
 
 - **Cache Hit Rate**: Repeated requests are served instantly from cache
 - **Success Rate**: 100% success rate with proper rate limiting
 - **Response Time**: ~1 second for new requests, instant for cached responses
+- **yfinance 0.2.66**: Latest version with improved stability and caching
+
+## Configuration
+
+Configure via environment variables:
+```bash
+YFINANCE_CACHE_DIR=/tmp/cache    # Cache directory (for containers)
+YFINANCE_RATE_LIMIT=1.0          # Requests per second
+YFINANCE_CACHE_TTL=300          # Cache TTL in seconds
+```

@@ -8,6 +8,7 @@ The original API was encountering 429 "Too Many Requests" errors when calling Ya
 2. **No retry logic**: Failed requests weren't retried with backoff
 3. **No caching**: Every request hit the API even for recently fetched data
 4. **Improper session management**: Attempts to use custom sessions conflicted with yfinance's requirements
+5. **File system issues**: yfinance cache couldn't be created in read-only containers
 
 ## Solution
 
@@ -54,6 +55,29 @@ for attempt in range(max_retries):
 
 Instead of trying to override yfinance's session (which caused conflicts with curl_cffi), we let yfinance handle its own session management and apply rate limiting at the application level.
 
+### 5. Container-Friendly Cache Configuration
+
+```python
+# Automatically configure cache directory for containers
+cache_dir = os.environ.get('YFINANCE_CACHE_DIR', tempfile.gettempdir())
+cache_path = os.path.join(cache_dir, 'yfinance_cache')
+
+try:
+    os.makedirs(cache_path, exist_ok=True)
+    yf.set_tz_cache_location(cache_path)
+except Exception as e:
+    # Graceful fallback if cache can't be created
+    pass
+```
+
+### 6. Environment-Based Configuration
+
+All settings are now configurable via environment variables:
+- `YFINANCE_RATE_LIMIT`: Requests per second (default: 1.0)
+- `YFINANCE_CACHE_TTL`: Cache TTL in seconds (default: 300)
+- `YFINANCE_CACHE_DIR`: Cache directory (default: system temp)
+- `YFINANCE_VERBOSE`: Enable verbose logging (default: false)
+
 ## Implementation Details
 
 ### YahooFinanceManager Class
@@ -72,10 +96,35 @@ All endpoints now use the async versions:
 - `quote_summary()` → `_load_summary_async()`
 - `chart_data()` → `_load_chart_async()`
 
-### Dependencies Added
+### Dependencies Updated
 
 ```
+yfinance==0.2.66         # Latest version with improved caching
 asyncio-throttle>=1.0.2  # For rate limiting
+```
+
+## Container/Deployment Configuration
+
+### Environment Variables
+
+```bash
+# Cache configuration for containerized environments
+YFINANCE_CACHE_DIR=/tmp/yfinance_cache  # Writable cache directory
+YFINANCE_RATE_LIMIT=1.0                 # Requests per second
+YFINANCE_CACHE_TTL=300                  # Cache TTL in seconds
+```
+
+### Docker Setup
+
+The included `docker-compose.yml` properly configures cache directories:
+
+```yaml
+environment:
+  - YFINANCE_CACHE_DIR=/tmp/yfinance_cache
+  - YFINANCE_RATE_LIMIT=1.0
+  - YFINANCE_CACHE_TTL=300
+volumes:
+  - yfinance_cache:/tmp/yfinance_cache
 ```
 
 ## Configuration Options
@@ -145,13 +194,30 @@ This tests that the API endpoints work correctly with the new rate limiting.
 
 ## Troubleshooting
 
+### Cache Warnings in Logs
+
+If you see warnings like:
+```
+INFO:yfinance:Failed to create CookieCache, reason: Error creating CookieCache folder: '/home/user/.cache/py-yfinance' reason: [Errno 30] Read-only file system
+```
+
+This is **normal** in containerized environments and won't affect functionality. The API:
+- ✅ **Still works perfectly** - these are just internal yfinance optimizations
+- ✅ **Has application-level caching** - our rate limiting and caching still work
+- ✅ **Auto-configures writable cache** - when possible, sets up proper cache directories
+
+To eliminate these warnings in production:
+1. Use the provided `docker-compose.yml` with proper volume mounts
+2. Set `YFINANCE_CACHE_DIR` to a writable directory
+3. Ensure the container has write permissions to the cache directory
+
 ### If you still get 429 errors:
-1. Reduce rate limit: `Throttler(rate_limit=0.5)`
-2. Increase retry backoff: Change `(2 ** attempt) * 3`
-3. Check cache is working: Look for cache hit logs
+1. Reduce rate limit: `YFINANCE_RATE_LIMIT=0.5`
+2. Increase cache TTL: `YFINANCE_CACHE_TTL=600`
+3. Check application cache is working: Look for cache hit logs
 
 ### If responses are too slow:
-1. Increase cache duration
+1. Increase cache duration: `YFINANCE_CACHE_TTL=600`
 2. Pre-warm cache for popular symbols
 3. Consider background refresh of expired cache entries
 
@@ -168,6 +234,33 @@ The implementation gracefully handles:
 - Network timeouts (with retry)
 - Invalid symbols (returns None)
 - API downtime (fails gracefully)
+
+## Latest yfinance 0.2.66 Compatibility
+
+This implementation is specifically designed for yfinance 0.2.66, which includes:
+
+- **curl_cffi Integration**: Native support for modern HTTP protocols
+- **Better Rate Limit Detection**: Improved 429 error handling
+- **Container Support**: Better cache handling in containerized environments
+- **Session Management**: Proper session lifecycle management
+
+### Health Monitoring
+
+The `/health` endpoint now provides detailed cache and rate limiting statistics:
+
+```json
+{
+  "status": "ok",
+  "timestamp": "2025-09-23T21:56:59.138613",
+  "cache_stats": {
+    "ticker_cache_size": 0,
+    "result_cache_size": 0,
+    "cache_ttl_seconds": 300,
+    "rate_limit_per_second": 1.0
+  },
+  "yfinance_version": "0.2.66"
+}
+```
 
 ## Future Improvements
 

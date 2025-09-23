@@ -2,31 +2,86 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
+import tempfile
 import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-import yfinance as yf
 from asyncio_throttle import Throttler
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 
-# Configure yfinance settings as per documentation
+# Configure yfinance cache locations BEFORE importing yfinance
+# This prevents the read-only filesystem errors in containerized environments
+cache_dir = os.environ.get('YFINANCE_CACHE_DIR', tempfile.gettempdir())
+
+# Test if we can write to the cache directory
+cache_writable = False
+try:
+    test_path = os.path.join(cache_dir, 'test_write_permissions')
+    os.makedirs(cache_dir, exist_ok=True)
+    with open(test_path, 'w') as f:
+        f.write('test')
+    os.remove(test_path)
+    cache_writable = True
+    print(f"✅ Cache directory is writable: {cache_dir}")
+except Exception as e:
+    print(f"⚠️  Cache directory not writable ({e}), yfinance will run without internal caching")
+
+# Set up yfinance cache paths if filesystem is writable
+if cache_writable:
+    # Set timezone cache location
+    tz_cache_path = os.path.join(cache_dir, 'yfinance_tz_cache')
+    os.makedirs(tz_cache_path, exist_ok=True)
+    
+    # Set cookie cache location by setting the cache directory in environment
+    # yfinance will use ~/.cache/py-yfinance, so we create that structure
+    py_cache_dir = os.path.join(cache_dir, '.cache')
+    py_yfinance_cache = os.path.join(py_cache_dir, 'py-yfinance')
+    os.makedirs(py_yfinance_cache, exist_ok=True)
+    
+    # Override HOME environment variable temporarily for yfinance
+    original_home = os.environ.get('HOME')
+    os.environ['HOME'] = cache_dir
+
+# Now import yfinance after setting up cache locations
+import yfinance as yf
+
+# Configure yfinance settings after import
+if cache_writable:
+    try:
+        yf.set_tz_cache_location(tz_cache_path)
+        print(f"✅ yfinance timezone cache: {tz_cache_path}")
+        print(f"✅ yfinance cookie cache: {py_yfinance_cache}")
+    except Exception as e:
+        print(f"⚠️  Could not configure yfinance caches: {e}")
+    
+    # Restore original HOME if it existed
+    if original_home:
+        os.environ['HOME'] = original_home
+    elif 'HOME' in os.environ:
+        del os.environ['HOME']
+
 # Enable debug mode for troubleshooting (you can disable this in production)
 # yf.enable_debug_mode()
-
-# Set custom cache location if needed (optional)
-# yf.set_tz_cache_location("./yfinance_cache")
 
 app = FastAPI(title="Stockly Market API", version="0.1.0")
 
 # Configure rate limiting and caching
 class YahooFinanceManager:
     def __init__(self):
+        # Configuration from environment variables
+        rate_limit = float(os.environ.get('YFINANCE_RATE_LIMIT', '1.0'))  # requests per second
+        cache_ttl = int(os.environ.get('YFINANCE_CACHE_TTL', '300'))      # cache TTL in seconds
+        self.verbose_logging = os.environ.get('YFINANCE_VERBOSE', 'false').lower() == 'true'
+        
         # Set up throttler for async operations - this is our main rate limiting mechanism
-        # Yahoo Finance has rate limits, so we need to be conservative
-        self.throttler = Throttler(rate_limit=1)  # 1 request per second
+        self.throttler = Throttler(rate_limit=rate_limit)
+        self.cache_ttl = cache_ttl
+        
+        print(f"🔧 Rate limit: {rate_limit} req/sec, Cache TTL: {cache_ttl}s, Verbose: {self.verbose_logging}")
         
         # Cache for ticker objects to avoid recreating them
         self._ticker_cache = {}
@@ -40,9 +95,9 @@ class YahooFinanceManager:
         """Get a ticker object with caching"""
         now = time.time()
         
-        # Check if we have a cached ticker that's still valid (5 minutes)
+        # Check if we have a cached ticker that's still valid
         if symbol in self._ticker_cache:
-            if symbol in self._cache_expiry and now - self._cache_expiry[symbol] < 300:
+            if symbol in self._cache_expiry and now - self._cache_expiry[symbol] < self.cache_ttl:
                 return self._ticker_cache[symbol]
         
         # Create new ticker - let yfinance handle the session
@@ -56,7 +111,7 @@ class YahooFinanceManager:
         """Get cached result if available and not expired"""
         now = time.time()
         if cache_key in self._result_cache:
-            if cache_key in self._result_cache_expiry and now - self._result_cache_expiry[cache_key] < 300:
+            if cache_key in self._result_cache_expiry and now - self._result_cache_expiry[cache_key] < self.cache_ttl:
                 return self._result_cache[cache_key]
         return None
     
@@ -72,7 +127,12 @@ class YahooFinanceManager:
         # Check cache first
         cached_result = self._get_cached_result(cache_key)
         if cached_result is not None:
+            if self.verbose_logging:
+                print(f"💾 Cache HIT for {symbol} info")
             return cached_result
+        
+        if self.verbose_logging:
+            print(f"🌐 Cache MISS for {symbol} info - fetching from API")
         
         # If not in cache, fetch with rate limiting
         async with self.throttler:
@@ -113,7 +173,12 @@ class YahooFinanceManager:
         # Check cache first
         cached_result = self._get_cached_result(cache_key)
         if cached_result is not None:
+            if self.verbose_logging:
+                print(f"💾 Cache HIT for {symbol} history")
             return cached_result
+            
+        if self.verbose_logging:
+            print(f"🌐 Cache MISS for {symbol} history - fetching from API")
             
         async with self.throttler:
             for attempt in range(3):
@@ -147,8 +212,20 @@ yahoo_manager = YahooFinanceManager()
 
 
 @app.get("/health", summary="Worker status check")
-async def health() -> Dict[str, str]:
-    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+async def health() -> Dict[str, Any]:
+    cache_stats = {
+        "ticker_cache_size": len(yahoo_manager._ticker_cache),
+        "result_cache_size": len(yahoo_manager._result_cache),
+        "cache_ttl_seconds": yahoo_manager.cache_ttl,
+        "rate_limit_per_second": yahoo_manager.throttler.rate_limit
+    }
+    
+    return {
+        "status": "ok", 
+        "timestamp": datetime.utcnow().isoformat(),
+        "cache_stats": cache_stats,
+        "yfinance_version": yf.__version__
+    }
 
 
 @app.get("/v7/finance/quote", summary="Batch quote lookup")

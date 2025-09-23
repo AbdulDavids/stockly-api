@@ -1,11 +1,20 @@
-version: "3.9"
+version: '3.8'
 
 services:
   stockly-api:
     build: .
-    container_name: stockly-api
     ports:
       - "8000:8000"
     environment:
-      - PYTHONUNBUFFERED=1
+      # Configure yfinance cache to use writable directory
+      - YFINANCE_CACHE_DIR=/tmp/yfinance_cache
+      # Rate limiting configuration
+      - YFINANCE_RATE_LIMIT=1.0
+      - YFINANCE_CACHE_TTL=300
+    volumes:
+      # Mount a writable cache directory
+      - yfinance_cache:/tmp/yfinance_cache
     restart: unless-stopped
+
+volumes:
+  yfinance_cache:
