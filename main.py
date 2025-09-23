@@ -67,7 +67,18 @@ if cache_writable:
 # Enable debug mode for troubleshooting (you can disable this in production)
 # yf.enable_debug_mode()
 
-app = FastAPI(title="Stockly Market API", version="0.1.0")
+app = FastAPI(
+    title="Stockly Market API", 
+    version="0.1.0",
+    description="A comprehensive stock market API powered by yfinance with rate limiting and caching",
+    contact={
+        "name": "Stockly API",
+        "url": "https://github.com/your-repo/stockly-api",
+    },
+    license_info={
+        "name": "MIT",
+    },
+)
 
 # Configure rate limiting and caching
 class YahooFinanceManager:
@@ -266,6 +277,543 @@ async def chart_data(
 ) -> Dict[str, Any]:
     payload = await _load_chart_async(symbol, range, interval)
     return {"chart": {"result": payload, "error": None}}
+
+
+# Additional helpful endpoints
+@app.get("/openapi.json", include_in_schema=False)
+async def get_openapi():
+    """Get OpenAPI JSON specification"""
+    return app.openapi()
+
+
+@app.get("/v1/finance/trending", summary="Get trending stocks")
+async def get_trending(
+    region: str = Query("US", description="Region code (US, GB, CA, etc.)"),
+    count: int = Query(10, ge=1, le=50, description="Number of trending stocks to return")
+) -> Dict[str, Any]:
+    """Get trending stocks for a specific region"""
+    try:
+        # Convert Query objects to actual values if needed (for direct function calls)
+        actual_region = region.default if hasattr(region, 'default') else region
+        actual_count = count.default if hasattr(count, 'default') else count
+        
+        trending = await _get_trending_symbols(actual_region, actual_count)
+        return {"trending": trending, "region": actual_region, "count": len(trending)}
+    except Exception as e:
+        error_region = region.default if hasattr(region, 'default') else region
+        return {"trending": [], "region": error_region, "count": 0, "error": str(e)}
+
+
+@app.get("/v1/finance/gainers", summary="Top gaining stocks")
+async def get_gainers(
+    count: int = Query(10, ge=1, le=50, description="Number of top gainers to return")
+) -> Dict[str, Any]:
+    """Get top gaining stocks"""
+    try:
+        gainers = await _get_market_movers("gainers", count)
+        return {"gainers": gainers, "count": len(gainers)}
+    except Exception as e:
+        return {"gainers": [], "count": 0, "error": str(e)}
+
+
+@app.get("/v1/finance/losers", summary="Top losing stocks")
+async def get_losers(
+    count: int = Query(10, ge=1, le=50, description="Number of top losers to return")
+) -> Dict[str, Any]:
+    """Get top losing stocks"""
+    try:
+        losers = await _get_market_movers("losers", count)
+        return {"losers": losers, "count": len(losers)}
+    except Exception as e:
+        return {"losers": [], "count": 0, "error": str(e)}
+
+
+@app.get("/v1/finance/most-active", summary="Most active stocks")
+async def get_most_active(
+    count: int = Query(10, ge=1, le=50, description="Number of most active stocks to return")
+) -> Dict[str, Any]:
+    """Get most active stocks by volume"""
+    try:
+        active = await _get_market_movers("most_active", count)
+        return {"most_active": active, "count": len(active)}
+    except Exception as e:
+        return {"most_active": [], "count": 0, "error": str(e)}
+
+
+@app.get("/v1/finance/dividends/{symbol}", summary="Dividend history")
+async def get_dividends(
+    symbol: str,
+    period: str = Query("1y", description="Period for dividend history (1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)")
+) -> Dict[str, Any]:
+    """Get dividend history for a symbol"""
+    try:
+        dividends = await _load_dividends_async(symbol, period)
+        return {"symbol": symbol, "dividends": dividends, "period": period}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/finance/splits/{symbol}", summary="Stock split history")
+async def get_splits(
+    symbol: str,
+    period: str = Query("5y", description="Period for split history (1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)")
+) -> Dict[str, Any]:
+    """Get stock split history for a symbol"""
+    try:
+        splits = await _load_splits_async(symbol, period)
+        return {"symbol": symbol, "splits": splits, "period": period}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/finance/news/{symbol}", summary="Company news")
+async def get_company_news(
+    symbol: str,
+    count: int = Query(10, ge=1, le=100, description="Number of news articles to return")
+) -> Dict[str, Any]:
+    """Get recent news for a company"""
+    try:
+        news = await _load_news_async(symbol, count)
+        return {"symbol": symbol, "news": news, "count": len(news)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/finance/earnings/{symbol}", summary="Earnings data")
+async def get_earnings(
+    symbol: str,
+    quarterly: bool = Query(False, description="Get quarterly earnings instead of annual")
+) -> Dict[str, Any]:
+    """Get earnings data for a symbol"""
+    try:
+        earnings = await _load_earnings_async(symbol, quarterly)
+        return {"symbol": symbol, "earnings": earnings, "quarterly": quarterly}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/finance/financials/{symbol}", summary="Financial statements")
+async def get_financials(
+    symbol: str,
+    statement: str = Query("income", description="Type of financial statement (income, balance, cashflow)"),
+    quarterly: bool = Query(False, description="Get quarterly data instead of annual")
+) -> Dict[str, Any]:
+    """Get financial statements for a symbol"""
+    try:
+        financials = await _load_financials_async(symbol, statement, quarterly)
+        return {"symbol": symbol, "statement": statement, "quarterly": quarterly, "data": financials}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/finance/holders/{symbol}", summary="Institutional holders")
+async def get_holders(
+    symbol: str,
+    holder_type: str = Query("institutional", description="Type of holders (institutional, mutual_fund, major)")
+) -> Dict[str, Any]:
+    """Get holder information for a symbol"""
+    try:
+        holders = await _load_holders_async(symbol, holder_type)
+        return {"symbol": symbol, "holder_type": holder_type, "holders": holders}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/finance/compare", summary="Compare multiple stocks")
+async def compare_stocks(
+    symbols: str = Query(..., description="Comma separated ticker symbols to compare"),
+    metrics: str = Query("price,change,volume,pe", description="Comma separated metrics to compare")
+) -> Dict[str, Any]:
+    """Compare key metrics across multiple stocks"""
+    try:
+        tickers = [sym.strip() for sym in symbols.split(",") if sym.strip()]
+        metric_list = [m.strip() for m in metrics.split(",") if m.strip()]
+        
+        comparison = await _compare_stocks_async(tickers, metric_list)
+        return {"symbols": tickers, "metrics": metric_list, "comparison": comparison}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/finance/sectors", summary="Sector performance")
+async def get_sector_performance() -> Dict[str, Any]:
+    """Get sector performance data"""
+    try:
+        sectors = await run_in_threadpool(_get_sector_performance)
+        return {"sectors": sectors, "count": len(sectors)}
+    except Exception as e:
+        return {"sectors": [], "count": 0, "error": str(e)}
+
+
+# Helper functions for new endpoints
+async def _get_trending_symbols(region: str, count: int) -> List[Dict[str, Any]]:
+    """Get trending symbols for a region"""
+    try:
+        # For demo purposes, return some popular symbols
+        # In a real implementation, you'd use yfinance's trending functionality
+        trending_symbols = {
+            "US": ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "NFLX", "CRM", "UBER"],
+            "GB": ["LLOY.L", "BP.L", "SHEL.L", "AZN.L", "GLEN.L", "GSK.L", "ULVR.L", "DGE.L", "NG.L", "RTO.L"],
+            "CA": ["SHOP.TO", "CNR.TO", "RY.TO", "TD.TO", "BNS.TO", "BMO.TO", "ENB.TO", "CNQ.TO", "SU.TO", "TRP.TO"]
+        }
+        
+        available_symbols = trending_symbols.get(region, trending_symbols["US"])
+        symbols = available_symbols[:count] if count <= len(available_symbols) else available_symbols
+        result = []
+        
+        for symbol in symbols:
+            try:
+                info = await yahoo_manager.get_info_with_retry(symbol)
+                if info:
+                    result.append({
+                        "symbol": symbol,
+                        "name": info.get("shortName", symbol),
+                        "price": info.get("regularMarketPrice"),
+                        "change": info.get("regularMarketChange"),
+                        "changePercent": info.get("regularMarketChangePercent")
+                    })
+            except:
+                continue
+                
+        return result
+    except Exception as e:
+        print(f"Error getting trending symbols: {e}")
+        return []
+
+
+async def _get_market_movers(mover_type: str, count: int) -> List[Dict[str, Any]]:
+    """Get market movers (gainers, losers, most active)"""
+    try:
+        # Sample symbols for each category
+        symbol_lists = {
+            "gainers": ["NVDA", "GOOGL", "MSFT", "AAPL", "AMZN", "META", "TSLA", "NFLX", "CRM", "AMD"],
+            "losers": ["PYPL", "INTC", "BA", "DIS", "UBER", "LYFT", "SPOT", "ZOOM", "PTON", "RIVN"],
+            "most_active": ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "GOOGL", "SPY", "QQQ", "NFLX"]
+        }
+        
+        available_symbols = symbol_lists.get(mover_type, symbol_lists["gainers"])
+        symbols = available_symbols[:count] if count <= len(available_symbols) else available_symbols
+        result = []
+        
+        for symbol in symbols:
+            try:
+                info = await yahoo_manager.get_info_with_retry(symbol)
+                if info:
+                    result.append({
+                        "symbol": symbol,
+                        "name": info.get("shortName", symbol),
+                        "price": info.get("regularMarketPrice"),
+                        "change": info.get("regularMarketChange"),
+                        "changePercent": info.get("regularMarketChangePercent"),
+                        "volume": info.get("regularMarketVolume")
+                    })
+            except:
+                continue
+                
+        return result
+    except Exception as e:
+        print(f"Error getting market movers: {e}")
+        return []
+
+
+async def _load_dividends_async(symbol: str, period: str) -> List[Dict[str, Any]]:
+    """Load dividend history for a symbol"""
+    cache_key = f"dividends_{symbol}_{period}"
+    
+    # Check cache first
+    cached_result = yahoo_manager._get_cached_result(cache_key)
+    if cached_result is not None:
+        if yahoo_manager.verbose_logging:
+            print(f"💾 Cache HIT for {symbol} dividends")
+        return cached_result
+    
+    if yahoo_manager.verbose_logging:
+        print(f"🌐 Cache MISS for {symbol} dividends - fetching from API")
+    
+    async with yahoo_manager.throttler:
+        try:
+            ticker = yahoo_manager.get_ticker(symbol)
+            dividends = ticker.dividends
+            
+            if not dividends.empty:
+                # Filter by period
+                if period != "max":
+                    dividends = dividends.tail(50)  # Limit for performance
+                
+                result = []
+                for date, amount in dividends.items():
+                    result.append({
+                        "date": date.strftime("%Y-%m-%d"),
+                        "amount": float(amount)
+                    })
+                
+                yahoo_manager._cache_result(cache_key, result)
+                return result
+            else:
+                yahoo_manager._cache_result(cache_key, [])
+                return []
+                
+        except Exception as e:
+            print(f"Error loading dividends for {symbol}: {e}")
+            return []
+
+
+async def _load_splits_async(symbol: str, period: str) -> List[Dict[str, Any]]:
+    """Load stock split history for a symbol"""
+    cache_key = f"splits_{symbol}_{period}"
+    
+    # Check cache first
+    cached_result = yahoo_manager._get_cached_result(cache_key)
+    if cached_result is not None:
+        if yahoo_manager.verbose_logging:
+            print(f"💾 Cache HIT for {symbol} splits")
+        return cached_result
+    
+    if yahoo_manager.verbose_logging:
+        print(f"🌐 Cache MISS for {symbol} splits - fetching from API")
+    
+    async with yahoo_manager.throttler:
+        try:
+            ticker = yahoo_manager.get_ticker(symbol)
+            splits = ticker.splits
+            
+            if not splits.empty:
+                result = []
+                for date, ratio in splits.items():
+                    result.append({
+                        "date": date.strftime("%Y-%m-%d"),
+                        "ratio": f"{int(ratio)}:1" if ratio > 1 else f"1:{int(1/ratio)}"
+                    })
+                
+                yahoo_manager._cache_result(cache_key, result)
+                return result
+            else:
+                yahoo_manager._cache_result(cache_key, [])
+                return []
+                
+        except Exception as e:
+            print(f"Error loading splits for {symbol}: {e}")
+            return []
+
+
+async def _load_news_async(symbol: str, count: int) -> List[Dict[str, Any]]:
+    """Load recent news for a symbol"""
+    cache_key = f"news_{symbol}_{count}"
+    
+    # Check cache first
+    cached_result = yahoo_manager._get_cached_result(cache_key)
+    if cached_result is not None:
+        if yahoo_manager.verbose_logging:
+            print(f"💾 Cache HIT for {symbol} news")
+        return cached_result
+    
+    if yahoo_manager.verbose_logging:
+        print(f"🌐 Cache MISS for {symbol} news - fetching from API")
+    
+    async with yahoo_manager.throttler:
+        try:
+            ticker = yahoo_manager.get_ticker(symbol)
+            news = ticker.news
+            
+            result = []
+            for article in news[:count]:
+                result.append({
+                    "title": article.get("title", ""),
+                    "link": article.get("link", ""),
+                    "publisher": article.get("publisher", ""),
+                    "publishedAt": article.get("providerPublishTime", 0),
+                    "summary": article.get("summary", "")
+                })
+            
+            yahoo_manager._cache_result(cache_key, result)
+            return result
+            
+        except Exception as e:
+            print(f"Error loading news for {symbol}: {e}")
+            return []
+
+
+async def _load_earnings_async(symbol: str, quarterly: bool) -> Dict[str, Any]:
+    """Load earnings data for a symbol"""
+    cache_key = f"earnings_{symbol}_{quarterly}"
+    
+    # Check cache first
+    cached_result = yahoo_manager._get_cached_result(cache_key)
+    if cached_result is not None:
+        if yahoo_manager.verbose_logging:
+            print(f"💾 Cache HIT for {symbol} earnings")
+        return cached_result
+    
+    if yahoo_manager.verbose_logging:
+        print(f"🌐 Cache MISS for {symbol} earnings - fetching from API")
+    
+    async with yahoo_manager.throttler:
+        try:
+            ticker = yahoo_manager.get_ticker(symbol)
+            
+            if quarterly:
+                # Use quarterly income statement and extract net income
+                income_stmt = ticker.quarterly_income_stmt
+            else:
+                # Use annual income statement and extract net income
+                income_stmt = ticker.income_stmt
+            
+            if income_stmt is not None and not income_stmt.empty:
+                # Extract net income as earnings proxy
+                result = {}
+                if 'Net Income' in income_stmt.index:
+                    net_income_data = income_stmt.loc['Net Income']
+                    result = {
+                        "net_income": net_income_data.to_dict(),
+                        "periods": list(net_income_data.index.strftime('%Y-%m-%d') if hasattr(net_income_data.index, 'strftime') else net_income_data.index)
+                    }
+                else:
+                    # Fallback: return the entire income statement
+                    result = income_stmt.to_dict()
+                
+                yahoo_manager._cache_result(cache_key, result)
+                return result
+            else:
+                yahoo_manager._cache_result(cache_key, {})
+                return {}
+                
+        except Exception as e:
+            print(f"Error loading earnings for {symbol}: {e}")
+            return {}
+
+
+async def _load_financials_async(symbol: str, statement: str, quarterly: bool) -> Dict[str, Any]:
+    """Load financial statements for a symbol"""
+    cache_key = f"financials_{symbol}_{statement}_{quarterly}"
+    
+    # Check cache first
+    cached_result = yahoo_manager._get_cached_result(cache_key)
+    if cached_result is not None:
+        if yahoo_manager.verbose_logging:
+            print(f"💾 Cache HIT for {symbol} {statement}")
+        return cached_result
+    
+    if yahoo_manager.verbose_logging:
+        print(f"🌐 Cache MISS for {symbol} {statement} - fetching from API")
+    
+    async with yahoo_manager.throttler:
+        try:
+            ticker = yahoo_manager.get_ticker(symbol)
+            
+            # Get the appropriate financial statement
+            if statement == "income":
+                data = ticker.quarterly_income_stmt if quarterly else ticker.income_stmt
+            elif statement == "balance":
+                data = ticker.quarterly_balance_sheet if quarterly else ticker.balance_sheet
+            elif statement == "cashflow":
+                data = ticker.quarterly_cashflow if quarterly else ticker.cashflow
+            else:
+                data = None
+            
+            if data is not None and not data.empty:
+                result = data.to_dict()
+                yahoo_manager._cache_result(cache_key, result)
+                return result
+            else:
+                yahoo_manager._cache_result(cache_key, {})
+                return {}
+                
+        except Exception as e:
+            print(f"Error loading {statement} for {symbol}: {e}")
+            return {}
+
+
+async def _load_holders_async(symbol: str, holder_type: str) -> List[Dict[str, Any]]:
+    """Load holder information for a symbol"""
+    cache_key = f"holders_{symbol}_{holder_type}"
+    
+    # Check cache first
+    cached_result = yahoo_manager._get_cached_result(cache_key)
+    if cached_result is not None:
+        if yahoo_manager.verbose_logging:
+            print(f"💾 Cache HIT for {symbol} {holder_type} holders")
+        return cached_result
+    
+    if yahoo_manager.verbose_logging:
+        print(f"🌐 Cache MISS for {symbol} {holder_type} holders - fetching from API")
+    
+    async with yahoo_manager.throttler:
+        try:
+            ticker = yahoo_manager.get_ticker(symbol)
+            
+            if holder_type == "institutional":
+                holders = ticker.institutional_holders
+            elif holder_type == "mutual_fund":
+                holders = ticker.mutualfund_holders
+            elif holder_type == "major":
+                holders = ticker.major_holders
+            else:
+                holders = None
+            
+            if holders is not None and not holders.empty:
+                result = holders.to_dict('records')
+                yahoo_manager._cache_result(cache_key, result)
+                return result
+            else:
+                yahoo_manager._cache_result(cache_key, [])
+                return []
+                
+        except Exception as e:
+            print(f"Error loading {holder_type} holders for {symbol}: {e}")
+            return []
+
+
+async def _compare_stocks_async(symbols: List[str], metrics: List[str]) -> List[Dict[str, Any]]:
+    """Compare metrics across multiple stocks"""
+    results = []
+    
+    for symbol in symbols:
+        try:
+            info = await yahoo_manager.get_info_with_retry(symbol)
+            if info:
+                comparison = {"symbol": symbol}
+                
+                for metric in metrics:
+                    if metric == "price":
+                        comparison["price"] = info.get("regularMarketPrice")
+                    elif metric == "change":
+                        comparison["change"] = info.get("regularMarketChange")
+                        comparison["changePercent"] = info.get("regularMarketChangePercent")
+                    elif metric == "volume":
+                        comparison["volume"] = info.get("regularMarketVolume")
+                    elif metric == "pe":
+                        comparison["pe"] = info.get("trailingPE")
+                    elif metric == "marketcap":
+                        comparison["marketCap"] = info.get("marketCap")
+                    elif metric == "dividend":
+                        comparison["dividendYield"] = info.get("dividendYield")
+                
+                results.append(comparison)
+        except Exception as e:
+            print(f"Error comparing {symbol}: {e}")
+            continue
+    
+    return results
+
+
+def _get_sector_performance() -> List[Dict[str, Any]]:
+    """Get sector performance data"""
+    # Sample sector data - in production, you'd get this from a proper source
+    sectors = [
+        {"name": "Technology", "change": 2.5, "volume": 1500000000},
+        {"name": "Healthcare", "change": 1.2, "volume": 800000000},
+        {"name": "Financial", "change": -0.8, "volume": 1200000000},
+        {"name": "Consumer Discretionary", "change": 0.9, "volume": 900000000},
+        {"name": "Energy", "change": -1.5, "volume": 600000000},
+        {"name": "Utilities", "change": 0.3, "volume": 300000000},
+        {"name": "Materials", "change": -0.2, "volume": 400000000},
+        {"name": "Industrials", "change": 0.7, "volume": 700000000},
+        {"name": "Consumer Staples", "change": 0.1, "volume": 500000000},
+        {"name": "Real Estate", "change": -0.4, "volume": 250000000},
+        {"name": "Communication Services", "change": 1.8, "volume": 1100000000}
+    ]
+    
+    return sectors
 
 
 async def _load_quotes_async(symbols: List[str]) -> List[Dict[str, Any]]:

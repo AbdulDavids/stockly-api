@@ -5,12 +5,35 @@ REST responses used by the Stockly Android client.
 
 ## Features
 
-- `GET /health` – basic status endpoint.
+### Core Endpoints (Yahoo Finance Compatible)
+- `GET /health` – enhanced status endpoint with cache stats.
 - `GET /v7/finance/quote?symbols=AAPL,MSFT` – batch quotes.
 - `GET /v1/finance/search?q=NVDA&quotesCount=10` – symbol/company search.
-- `GET /v10/finance/quoteSummary/{symbol}?modules=price,summaryDetail` – rich
-  quote summary.
+- `GET /v10/finance/quoteSummary/{symbol}?modules=price,summaryDetail` – rich quote summary.
 - `GET /v8/finance/chart/{symbol}?range=1mo&interval=1d` – historical price/volume.
+
+### New Market Data Endpoints
+- `GET /v1/finance/trending?region=US&count=10` – trending stocks by region.
+- `GET /v1/finance/gainers?count=10` – top gaining stocks.
+- `GET /v1/finance/losers?count=10` – top losing stocks.
+- `GET /v1/finance/most-active?count=10` – most active stocks by volume.
+- `GET /v1/finance/sectors` – sector performance data.
+
+### Company-Specific Endpoints
+- `GET /v1/finance/dividends/{symbol}?period=1y` – dividend history.
+- `GET /v1/finance/splits/{symbol}?period=5y` – stock split history.
+- `GET /v1/finance/news/{symbol}?count=10` – recent company news.
+- `GET /v1/finance/earnings/{symbol}?quarterly=false` – earnings data.
+- `GET /v1/finance/financials/{symbol}?statement=income&quarterly=false` – financial statements.
+- `GET /v1/finance/holders/{symbol}?holder_type=institutional` – holder information.
+
+### Analysis Endpoints
+- `GET /v1/finance/compare?symbols=AAPL,MSFT,GOOGL&metrics=price,change,pe` – compare stocks.
+
+### API Documentation
+- `GET /openapi.json` – OpenAPI specification.
+- `GET /docs` – Interactive API documentation (Swagger UI).
+- `GET /redoc` – Alternative API documentation (ReDoc).
 
 Responses follow Yahoo’s JSON structure so the Android mappers continue to work
 unchanged.
