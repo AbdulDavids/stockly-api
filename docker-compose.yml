@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  stockly-api:
+    build: .
+    container_name: stockly-api
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
