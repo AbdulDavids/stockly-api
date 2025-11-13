@@ -12,6 +12,9 @@ import pandas as pd
 from asyncio_throttle import Throttler
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
+from fastapi.openapi.utils import get_openapi
+from openai import AsyncOpenAI
+from pydantic import BaseModel
 
 # Configure yfinance cache locations BEFORE importing yfinance
 # This prevents the read-only filesystem errors in containerized environments
@@ -79,6 +82,25 @@ app = FastAPI(
         "name": "MIT",
     },
 )
+
+
+def custom_openapi() -> Dict[str, Any]:
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    openapi_schema["servers"] = [
+        {"url": "https://stockly-api.vercel.app", "description": "Production"}
+    ]
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
 
 # Configure rate limiting and caching
 class YahooFinanceManager:
@@ -1156,3 +1178,93 @@ def _series_to_list(series: Optional[pd.Series], cast_to_int: bool = False) -> L
             values.append(float(value))
     return values
 
+
+# Initialize OpenAI client
+openai_client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+
+# Pydantic model for structured AI output
+class StockRecommendation(BaseModel):
+    recommendation: str  # "BUY", "SELL", or "HOLD"
+    priceTarget: float
+    riskScore: int  # 1-10
+    confidence: int  # 0-100
+    justification: str
+
+
+@app.get("/generate-stock-insights")
+async def generate_stock_insights(symbol: str = Query(..., description="Stock symbol")):
+    """
+    Generate AI-powered stock insights using GPT-4o-mini with structured output.
+    Returns BUY/SELL/HOLD recommendation, price target, risk score, confidence, and justification.
+    """
+    try:
+        # Fetch stock data using existing infrastructure
+        ticker = yf.Ticker(symbol)
+        info = await run_in_threadpool(ticker.get_info)
+        hist = await run_in_threadpool(ticker.history, period="1y", interval="1d", auto_adjust=False)
+
+        if not info or hist.empty:
+            raise HTTPException(status_code=404, detail=f"Stock data not found for {symbol}")
+
+        # Calculate performance metrics
+        current_price = info.get("regularMarketPrice") or info.get("currentPrice")
+        if not current_price:
+            raise HTTPException(status_code=400, detail="Unable to fetch current price")
+
+        # Calculate 1-year performance
+        year_ago_price = hist["Close"].iloc[0] if len(hist) > 0 else current_price
+        year_performance = ((current_price - year_ago_price) / year_ago_price * 100) if year_ago_price else 0
+
+        # Calculate volatility (standard deviation of daily returns)
+        daily_returns = hist["Close"].pct_change().dropna()
+        volatility = daily_returns.std() * 100 if len(daily_returns) > 0 else 0
+
+        # Prepare prompt for AI
+        prompt = f"""Analyze the following stock and provide investment insights:
+
+Stock: {symbol}
+Company: {info.get('longName', 'N/A')}
+Sector: {info.get('sector', 'N/A')}
+Industry: {info.get('industry', 'N/A')}
+Current Price: ${current_price:.2f}
+52-Week High: ${info.get('fiftyTwoWeekHigh', 'N/A')}
+52-Week Low: ${info.get('fiftyTwoWeekLow', 'N/A')}
+Market Cap: {info.get('marketCap', 'N/A')}
+P/E Ratio: {info.get('trailingPE', 'N/A')}
+Forward P/E: {info.get('forwardPE', 'N/A')}
+PEG Ratio: {info.get('pegRatio', 'N/A')}
+1-Year Performance: {year_performance:.2f}%
+Volatility (std dev): {volatility:.2f}%
+Analyst Target Price: ${info.get('targetMeanPrice', 'N/A')}
+
+Provide a recommendation (BUY, SELL, or HOLD), a 6-12 month price target, risk score (1-10), confidence level (0-100), and a 2-3 sentence justification."""
+
+        # Call OpenAI with structured output
+        completion = await openai_client.beta.chat.completions.parse(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a financial analyst AI providing stock investment insights."},
+                {"role": "user", "content": prompt}
+            ],
+            response_format=StockRecommendation,
+        )
+
+        recommendation = completion.choices[0].message.parsed
+
+        # Validate and return response
+        return {
+            "symbol": symbol,
+            "recommendation": recommendation.recommendation.upper(),
+            "priceTarget": recommendation.priceTarget,
+            "riskScore": max(1, min(10, recommendation.riskScore)),
+            "confidence": max(0, min(100, recommendation.confidence)),
+            "justification": recommendation.justification[:500],
+            "timestamp": datetime.now().isoformat(),
+            "error": None
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate AI insights: {str(e)}")

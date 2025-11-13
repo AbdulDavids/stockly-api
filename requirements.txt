@@ -4,3 +4,4 @@ yfinance==0.2.66
 pandas
 numpy
 asyncio-throttle>=1.0.2
+openai==2.8.0
