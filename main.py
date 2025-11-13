@@ -1365,7 +1365,7 @@ Provide a recommendation (BUY, SELL, or HOLD), a 6-12 month price target, risk s
 
         # Call OpenAI with structured output
         completion = await openai_client.beta.chat.completions.parse(
-            model="gpt-4-mini",
+            model="gpt-5-mini",
             messages=[
                 {
                     "role": "system",
