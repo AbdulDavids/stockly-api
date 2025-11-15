@@ -72,10 +72,186 @@ if cache_writable:
 # Enable debug mode for troubleshooting (you can disable this in production)
 # yf.enable_debug_mode()
 
+
+# Response Models
+class HealthResponse(BaseModel):
+    status: str
+    timestamp: str
+    cache_stats: Dict[str, Any]
+    yfinance_version: str
+
+
+class QuoteData(BaseModel):
+    symbol: str
+    regularMarketPrice: Optional[float] = None
+    regularMarketChange: Optional[float] = None
+    regularMarketChangePercent: Optional[float] = None
+    regularMarketVolume: Optional[int] = None
+    marketCap: Optional[float] = None
+    fiftyTwoWeekHigh: Optional[float] = None
+    fiftyTwoWeekLow: Optional[float] = None
+
+
+class QuoteResponse(BaseModel):
+    quoteResponse: Dict[str, Any]
+
+
+class SearchResult(BaseModel):
+    symbol: str
+    name: Optional[str] = None
+    exchange: Optional[str] = None
+    type: Optional[str] = None
+
+
+class SearchResponse(BaseModel):
+    quotes: List[SearchResult]
+    news: List[Dict[str, Any]] = []
+
+
+class TrendingStock(BaseModel):
+    symbol: str
+    name: Optional[str] = None
+    price: Optional[float] = None
+    change: Optional[float] = None
+    changePercent: Optional[float] = None
+
+
+class TrendingResponse(BaseModel):
+    trending: List[TrendingStock]
+    region: str
+    count: int
+    error: Optional[str] = None
+
+
+class MarketMoverStock(BaseModel):
+    symbol: str
+    name: Optional[str] = None
+    price: Optional[float] = None
+    change: Optional[float] = None
+    changePercent: Optional[float] = None
+    volume: Optional[int] = None
+
+
+class MarketMoversResponse(BaseModel):
+    stocks: List[MarketMoverStock]
+    count: int
+    error: Optional[str] = None
+
+
+class DividendData(BaseModel):
+    date: Any  # Can be string or timestamp
+    amount: Any  # Can be float or other numeric type
+
+
+class DividendsResponse(BaseModel):
+    symbol: str
+    dividends: List[DividendData]
+    count: int
+    period: str
+
+
+class SplitData(BaseModel):
+    date: Any  # Can be string or timestamp
+    ratio: Any  # Can be string or numeric
+
+
+class SplitsResponse(BaseModel):
+    symbol: str
+    splits: List[SplitData]
+    count: int
+    period: str
+
+
+class NewsArticle(BaseModel):
+    title: str
+    publisher: Optional[str] = None
+    link: Optional[str] = None
+    publishedAt: Optional[Any] = None  # Can be int timestamp or string
+    thumbnail: Optional[str] = None
+
+
+class NewsResponse(BaseModel):
+    symbol: str
+    news: List[NewsArticle]
+    count: int
+
+
+class CompareResponse(BaseModel):
+    symbols: List[str]
+    metrics: List[str]
+    comparison: List[Dict[str, Any]]
+
+
+class SectorData(BaseModel):
+    name: str
+    performance: Optional[float] = None
+    volume: Optional[int] = None
+
+
+class SectorResponse(BaseModel):
+    sectors: List[SectorData]
+    count: int
+
+
+class StockRecommendation(BaseModel):
+    recommendation: str  # "BUY", "SELL", or "HOLD"
+    priceTarget: float
+    riskScore: int  # 1-10
+    confidence: int  # 0-100
+    justification: str
+
+
+tags_metadata = [
+    {
+        "name": "Health",
+        "description": "Health check and status endpoints",
+    },
+    {
+        "name": "Market Data",
+        "description": "Real-time and historical stock market data",
+    },
+    {
+        "name": "Search",
+        "description": "Search for stocks and companies",
+    },
+    {
+        "name": "Market Movers",
+        "description": "Trending, gainers, losers, and most active stocks",
+    },
+    {
+        "name": "Company Data",
+        "description": "Company-specific information including dividends, splits, news, earnings, and financials",
+    },
+    {
+        "name": "Analysis",
+        "description": "Stock comparison and sector performance analysis",
+    },
+    {
+        "name": "AI Insights",
+        "description": "AI-powered stock analysis and recommendations",
+    },
+]
+
 app = FastAPI(
     title="Stockly Market API",
     version="0.1.0",
-    description="A comprehensive stock market API powered by yfinance with rate limiting and caching",
+    description="""
+## Stockly Market API
+
+A comprehensive stock market API powered by yfinance with rate limiting and caching.
+
+### Features:
+* **Real-time stock data** - Get current stock prices and market data
+* **Historical data** - Access historical stock prices and trading volumes
+* **Technical indicators** - Calculate moving averages, RSI, MACD, and more
+* **AI-powered analysis** - Get AI-generated stock recommendations and insights
+* **Rate limiting** - Built-in rate limiting to prevent API abuse
+* **Caching** - Intelligent caching for improved performance
+
+### Rate Limits:
+* Configurable rate limiting per endpoint
+* Default: 1 request per second to Yahoo Finance API
+    """,
     contact={
         "name": "Stockly API",
         "url": "https://github.com/your-repo/stockly-api",
@@ -83,21 +259,37 @@ app = FastAPI(
     license_info={
         "name": "MIT",
     },
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    openapi_tags=tags_metadata,
 )
 
 
 def custom_openapi() -> Dict[str, Any]:
     if app.openapi_schema:
         return app.openapi_schema
-    openapi_schema = get_openapi(
+
+    # Use FastAPI's default openapi generation
+    from fastapi.openapi.utils import get_openapi as _get_openapi
+
+    openapi_schema = _get_openapi(
         title=app.title,
         version=app.version,
         description=app.description,
         routes=app.routes,
     )
+
+    # Add tags metadata
+    if app.openapi_tags:
+        openapi_schema["tags"] = app.openapi_tags
+
+    # Add custom server information
     openapi_schema["servers"] = [
-        {"url": "https://stockly-api.vercel.app", "description": "Production"}
+        {"url": "http://localhost:8000", "description": "Local development"},
+        {"url": "https://stockly-api.vercel.app", "description": "Production"},
     ]
+
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
@@ -272,8 +464,8 @@ class YahooFinanceManager:
 yahoo_manager = YahooFinanceManager()
 
 
-@app.get("/health", summary="Worker status check")
-async def health() -> Dict[str, Any]:
+@app.get("/health", summary="Worker status check", tags=["Health"], response_model=HealthResponse)
+async def health() -> HealthResponse:
     cache_stats = {
         "ticker_cache_size": len(yahoo_manager._ticker_cache),
         "result_cache_size": len(yahoo_manager._result_cache),
@@ -289,10 +481,15 @@ async def health() -> Dict[str, Any]:
     }
 
 
-@app.get("/v7/finance/quote", summary="Batch quote lookup")
+@app.get(
+    "/v7/finance/quote",
+    summary="Batch quote lookup",
+    tags=["Market Data"],
+    response_model=QuoteResponse,
+)
 async def get_quotes(
     symbols: str = Query(..., description="Comma separated ticker symbols"),
-) -> Dict[str, Any]:
+) -> QuoteResponse:
     tickers = [sym.strip() for sym in symbols.split(",") if sym.strip()]
     if not tickers:
         raise HTTPException(status_code=400, detail="No symbols provided")
@@ -301,13 +498,18 @@ async def get_quotes(
     return {"quoteResponse": {"result": results, "error": None}}
 
 
-@app.get("/v1/finance/search", summary="Symbol/company search")
+@app.get(
+    "/v1/finance/search",
+    summary="Symbol/company search",
+    tags=["Search"],
+    response_model=SearchResponse,
+)
 async def search_quotes(
     q: str = Query(..., description="Search term"),
     quotesCount: int = Query(
         10, ge=1, le=25, description="Max number of quote matches"
     ),
-) -> Dict[str, Any]:
+) -> SearchResponse:
     if not q:
         return {"quotes": [], "news": [], "total": 0}
 
@@ -315,7 +517,7 @@ async def search_quotes(
     return payload
 
 
-@app.get("/v10/finance/quoteSummary/{symbol}", summary="Detailed quote summary")
+@app.get("/v10/finance/quoteSummary/{symbol}", summary="Detailed quote summary", tags=["Market Data"])
 async def quote_summary(
     symbol: str, modules: str = Query("", description="Comma separated modules")
 ) -> Dict[str, Any]:
@@ -325,7 +527,7 @@ async def quote_summary(
     return {"quoteSummary": {"result": [result], "error": None}}
 
 
-@app.get("/v8/finance/chart/{symbol}", summary="Historical chart data")
+@app.get("/v8/finance/chart/{symbol}", summary="Historical chart data", tags=["Market Data"])
 async def chart_data(
     symbol: str,
     range: Optional[str] = Query(None, alias="range"),
@@ -342,13 +544,18 @@ async def get_openapi():
     return app.openapi()
 
 
-@app.get("/v1/finance/trending", summary="Get trending stocks")
+@app.get(
+    "/v1/finance/trending",
+    summary="Get trending stocks",
+    tags=["Market Movers"],
+    response_model=TrendingResponse,
+)
 async def get_trending(
     region: str = Query("US", description="Region code (US, GB, CA, etc.)"),
     count: int = Query(
         10, ge=1, le=50, description="Number of trending stocks to return"
     ),
-) -> Dict[str, Any]:
+) -> TrendingResponse:
     """Get trending stocks for a specific region"""
     try:
         # Convert Query objects to actual values if needed (for direct function calls)
@@ -362,83 +569,113 @@ async def get_trending(
         return {"trending": [], "region": error_region, "count": 0, "error": str(e)}
 
 
-@app.get("/v1/finance/gainers", summary="Top gaining stocks")
+@app.get(
+    "/v1/finance/gainers",
+    summary="Top gaining stocks",
+    tags=["Market Movers"],
+    response_model=MarketMoversResponse,
+)
 async def get_gainers(
     count: int = Query(10, ge=1, le=50, description="Number of top gainers to return"),
-) -> Dict[str, Any]:
+) -> MarketMoversResponse:
     """Get top gaining stocks"""
     try:
         gainers = await _get_market_movers("gainers", count)
-        return {"gainers": gainers, "count": len(gainers)}
+        return {"stocks": gainers, "count": len(gainers)}
     except Exception as e:
-        return {"gainers": [], "count": 0, "error": str(e)}
+        return {"stocks": [], "count": 0, "error": str(e)}
 
 
-@app.get("/v1/finance/losers", summary="Top losing stocks")
+@app.get(
+    "/v1/finance/losers",
+    summary="Top losing stocks",
+    tags=["Market Movers"],
+    response_model=MarketMoversResponse,
+)
 async def get_losers(
     count: int = Query(10, ge=1, le=50, description="Number of top losers to return"),
-) -> Dict[str, Any]:
+) -> MarketMoversResponse:
     """Get top losing stocks"""
     try:
         losers = await _get_market_movers("losers", count)
-        return {"losers": losers, "count": len(losers)}
+        return {"stocks": losers, "count": len(losers)}
     except Exception as e:
-        return {"losers": [], "count": 0, "error": str(e)}
+        return {"stocks": [], "count": 0, "error": str(e)}
 
 
-@app.get("/v1/finance/most-active", summary="Most active stocks")
+@app.get(
+    "/v1/finance/most-active",
+    summary="Most active stocks",
+    tags=["Market Movers"],
+    response_model=MarketMoversResponse,
+)
 async def get_most_active(
     count: int = Query(
         10, ge=1, le=50, description="Number of most active stocks to return"
     ),
-) -> Dict[str, Any]:
+) -> MarketMoversResponse:
     """Get most active stocks by volume"""
     try:
         active = await _get_market_movers("most_active", count)
-        return {"most_active": active, "count": len(active)}
+        return {"stocks": active, "count": len(active)}
     except Exception as e:
-        return {"most_active": [], "count": 0, "error": str(e)}
+        return {"stocks": [], "count": 0, "error": str(e)}
 
 
-@app.get("/v1/finance/dividends/{symbol}", summary="Dividend history")
+@app.get(
+    "/v1/finance/dividends/{symbol}",
+    summary="Dividend history",
+    tags=["Company Data"],
+    response_model=DividendsResponse,
+)
 async def get_dividends(
     symbol: str,
     period: str = Query(
         "1y",
         description="Period for dividend history (1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)",
     ),
-) -> Dict[str, Any]:
+) -> DividendsResponse:
     """Get dividend history for a symbol"""
     try:
         dividends = await _load_dividends_async(symbol, period)
-        return {"symbol": symbol, "dividends": dividends, "period": period}
+        return {"symbol": symbol, "dividends": dividends, "count": len(dividends), "period": period}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/v1/finance/splits/{symbol}", summary="Stock split history")
+@app.get(
+    "/v1/finance/splits/{symbol}",
+    summary="Stock split history",
+    tags=["Company Data"],
+    response_model=SplitsResponse,
+)
 async def get_splits(
     symbol: str,
     period: str = Query(
         "5y",
         description="Period for split history (1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)",
     ),
-) -> Dict[str, Any]:
+) -> SplitsResponse:
     """Get stock split history for a symbol"""
     try:
         splits = await _load_splits_async(symbol, period)
-        return {"symbol": symbol, "splits": splits, "period": period}
+        return {"symbol": symbol, "splits": splits, "count": len(splits), "period": period}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/v1/finance/news/{symbol}", summary="Company news")
+@app.get(
+    "/v1/finance/news/{symbol}",
+    summary="Company news",
+    tags=["Company Data"],
+    response_model=NewsResponse,
+)
 async def get_company_news(
     symbol: str,
     count: int = Query(
         10, ge=1, le=100, description="Number of news articles to return"
     ),
-) -> Dict[str, Any]:
+) -> NewsResponse:
     """Get recent news for a company"""
     try:
         news = await _load_news_async(symbol, count)
@@ -447,7 +684,7 @@ async def get_company_news(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/v1/finance/earnings/{symbol}", summary="Earnings data")
+@app.get("/v1/finance/earnings/{symbol}", summary="Earnings data", tags=["Company Data"])
 async def get_earnings(
     symbol: str,
     quarterly: bool = Query(
@@ -462,7 +699,7 @@ async def get_earnings(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/v1/finance/financials/{symbol}", summary="Financial statements")
+@app.get("/v1/finance/financials/{symbol}", summary="Financial statements", tags=["Company Data"])
 async def get_financials(
     symbol: str,
     statement: str = Query(
@@ -483,7 +720,7 @@ async def get_financials(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/v1/finance/holders/{symbol}", summary="Institutional holders")
+@app.get("/v1/finance/holders/{symbol}", summary="Institutional holders", tags=["Company Data"])
 async def get_holders(
     symbol: str,
     holder_type: str = Query(
@@ -499,13 +736,18 @@ async def get_holders(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/v1/finance/compare", summary="Compare multiple stocks")
+@app.get(
+    "/v1/finance/compare",
+    summary="Compare multiple stocks",
+    tags=["Analysis"],
+    response_model=CompareResponse,
+)
 async def compare_stocks(
     symbols: str = Query(..., description="Comma separated ticker symbols to compare"),
     metrics: str = Query(
         "price,change,volume,pe", description="Comma separated metrics to compare"
     ),
-) -> Dict[str, Any]:
+) -> CompareResponse:
     """Compare key metrics across multiple stocks"""
     try:
         tickers = [sym.strip() for sym in symbols.split(",") if sym.strip()]
@@ -517,8 +759,13 @@ async def compare_stocks(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/v1/finance/sectors", summary="Sector performance")
-async def get_sector_performance() -> Dict[str, Any]:
+@app.get(
+    "/v1/finance/sectors",
+    summary="Sector performance",
+    tags=["Analysis"],
+    response_model=SectorResponse,
+)
+async def get_sector_performance() -> SectorResponse:
     """Get sector performance data"""
     try:
         sectors = await run_in_threadpool(_get_sector_performance)
@@ -1298,17 +1545,15 @@ def _series_to_list(
 openai_client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 
-# Pydantic model for structured AI output
-class StockRecommendation(BaseModel):
-    recommendation: str  # "BUY", "SELL", or "HOLD"
-    priceTarget: float
-    riskScore: int  # 1-10
-    confidence: int  # 0-100
-    justification: str
-
-
-@app.get("/generate-stock-insights")
-async def generate_stock_insights(symbol: str = Query(..., description="Stock symbol")):
+@app.get(
+    "/generate-stock-insights",
+    summary="AI-powered stock analysis",
+    tags=["AI Insights"],
+    response_model=StockRecommendation,
+)
+async def generate_stock_insights(
+    symbol: str = Query(..., description="Stock symbol")
+) -> StockRecommendation:
     """
     Generate AI-powered stock insights using GPT-4o-mini with structured output.
     Returns BUY/SELL/HOLD recommendation, price target, risk score, confidence, and justification.

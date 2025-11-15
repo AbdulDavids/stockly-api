@@ -5,12 +5,11 @@ services:
     build: .
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
       # Configure yfinance cache to use writable directory
       - YFINANCE_CACHE_DIR=/tmp/yfinance_cache
-      # Rate limiting configuration
-      - YFINANCE_RATE_LIMIT=1.0
-      - YFINANCE_CACHE_TTL=300
     volumes:
       # Mount a writable cache directory
       - yfinance_cache:/tmp/yfinance_cache
