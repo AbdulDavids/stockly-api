@@ -1606,10 +1606,13 @@ async def generate_stock_insights(
         # Check cache first
         cached_result = yahoo_manager.get_cached_ai_result(cache_key)
         if cached_result is not None:
+            print(f"💾 AI Cache HIT for {symbol}")
             # Ensure symbol is always present in cached results
             if "symbol" not in cached_result or cached_result["symbol"] is None:
                 cached_result["symbol"] = symbol
             return cached_result
+
+        print(f"🌐 AI Cache MISS for {symbol} - generating new insights")
 
         # Fetch stock data using existing infrastructure
         ticker = yf.Ticker(symbol)
@@ -1689,6 +1692,7 @@ Provide a recommendation (BUY, SELL, or HOLD), a 6-12 month price target, risk s
 
         # Cache the result for 24 hours
         yahoo_manager.cache_ai_result(cache_key, result)
+        print(f"💾 AI insights cached for {symbol} (valid until {date.today() + timedelta(days=1)})")
 
         return result
 
