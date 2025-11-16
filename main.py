@@ -1603,6 +1603,9 @@ async def generate_stock_insights(
         # Check cache first
         cached_result = yahoo_manager.get_cached_ai_result(cache_key)
         if cached_result is not None:
+            # Ensure symbol is always present in cached results
+            if "symbol" not in cached_result or cached_result["symbol"] is None:
+                cached_result["symbol"] = symbol
             return cached_result
 
         # Fetch stock data using existing infrastructure
