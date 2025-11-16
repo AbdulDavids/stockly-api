@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import os
 import tempfile
@@ -16,6 +17,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.openapi.utils import get_openapi
 from openai import AsyncOpenAI
 from pydantic import BaseModel
+from upstash_redis import Redis
 
 # Load environment variables from .env file
 load_dotenv()
@@ -379,7 +381,22 @@ class YahooFinanceManager:
         self._result_cache_expiry[cache_key] = time.time()
 
     def get_cached_ai_result(self, cache_key: str) -> Optional[Any]:
-        """Get cached AI result if available and not expired"""
+        """Get cached AI result if available and not expired - uses Redis if available"""
+        # Try Redis first if available
+        if redis_client:
+            try:
+                cached_data = redis_client.get(cache_key)
+                if cached_data:
+                    if self.verbose_logging:
+                        print(f"💾 Redis AI Cache HIT for {cache_key}")
+                    # Decode if bytes, parse JSON
+                    if isinstance(cached_data, bytes):
+                        cached_data = cached_data.decode('utf-8')
+                    return json.loads(cached_data) if isinstance(cached_data, str) else cached_data
+            except Exception as e:
+                print(f"⚠️  Redis get failed for {cache_key}: {e}")
+
+        # Fallback to in-memory cache
         now = time.time()
         if cache_key in self._ai_cache:
             if (
@@ -387,18 +404,35 @@ class YahooFinanceManager:
                 and now - self._ai_cache_expiry[cache_key] < self.ai_cache_ttl
             ):
                 if self.verbose_logging:
-                    print(f"💾 AI Cache HIT for {cache_key}")
+                    print(f"💾 In-memory AI Cache HIT for {cache_key}")
                 return self._ai_cache[cache_key]
+
         if self.verbose_logging:
             print(f"🌐 AI Cache MISS for {cache_key}")
         return None
 
     def cache_ai_result(self, cache_key: str, result: Any):
-        """Cache an AI result with timestamp"""
+        """Cache an AI result with timestamp - uses Redis if available"""
+        # Try Redis first if available
+        if redis_client:
+            try:
+                # Serialize to JSON and store with TTL
+                redis_client.setex(
+                    cache_key,
+                    self.ai_cache_ttl,  # TTL in seconds
+                    json.dumps(result)
+                )
+                if self.verbose_logging:
+                    print(f"💾 AI result cached in Redis for {cache_key}")
+                return  # Don't store in memory if Redis succeeded
+            except Exception as e:
+                print(f"⚠️  Redis set failed for {cache_key}: {e} - falling back to in-memory")
+
+        # Fallback to in-memory cache
         self._ai_cache[cache_key] = result
         self._ai_cache_expiry[cache_key] = time.time()
         if self.verbose_logging:
-            print(f"💾 AI result cached for {cache_key}")
+            print(f"💾 AI result cached in-memory for {cache_key}")
 
     async def get_info_with_retry(
         self, symbol: str, max_retries: int = 3
@@ -497,6 +531,20 @@ class YahooFinanceManager:
 
         return None
 
+
+# Initialize Redis for distributed caching (optional - fallback to in-memory if not configured)
+redis_client = None
+try:
+    redis_url = os.environ.get("KV_REST_API_URL")
+    redis_token = os.environ.get("KV_REST_API_TOKEN")
+    if redis_url and redis_token:
+        redis_client = Redis(url=redis_url, token=redis_token)
+        print("✅ Redis/Vercel KV initialized for distributed caching")
+    else:
+        print("⚠️  Redis not configured - using in-memory cache (not shared across instances)")
+except Exception as e:
+    print(f"⚠️  Failed to initialize Redis: {e} - using in-memory cache")
+    redis_client = None
 
 # Global instance
 yahoo_manager = YahooFinanceManager()

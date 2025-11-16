@@ -5,3 +5,4 @@ pandas
 numpy
 asyncio-throttle>=1.0.2
 openai==2.8.0
+upstash-redis>=1.1.0
