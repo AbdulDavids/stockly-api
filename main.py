@@ -198,11 +198,14 @@ class SectorResponse(BaseModel):
 
 
 class StockRecommendation(BaseModel):
+    symbol: Optional[str] = None
     recommendation: str  # "BUY", "SELL", or "HOLD"
     priceTarget: float
     riskScore: int  # 1-10
     confidence: int  # 0-100
     justification: str
+    timestamp: Optional[str] = None
+    error: Optional[str] = None
 
 
 tags_metadata = [
