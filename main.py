@@ -10,11 +10,15 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from asyncio_throttle import Throttler
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.openapi.utils import get_openapi
 from openai import AsyncOpenAI
 from pydantic import BaseModel
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Configure yfinance cache locations BEFORE importing yfinance
 # This prevents the read-only filesystem errors in containerized environments
@@ -315,8 +319,13 @@ class YahooFinanceManager:
         self.throttler = Throttler(rate_limit=rate_limit)
         self.cache_ttl = cache_ttl
 
+        # AI cache TTL - default to 24 hours (86400 seconds)
+        self.ai_cache_ttl = int(
+            os.environ.get("AI_CACHE_TTL", "86400")
+        )
+
         print(
-            f"🔧 Rate limit: {rate_limit} req/sec, Cache TTL: {cache_ttl}s, Verbose: {self.verbose_logging}"
+            f"🔧 Rate limit: {rate_limit} req/sec, Cache TTL: {cache_ttl}s, AI Cache TTL: {self.ai_cache_ttl}s, Verbose: {self.verbose_logging}"
         )
 
         # Cache for ticker objects to avoid recreating them
@@ -326,6 +335,10 @@ class YahooFinanceManager:
         # Cache for results to avoid redundant API calls
         self._result_cache = {}
         self._result_cache_expiry = {}
+
+        # Cache for AI generations (separate cache with different TTL)
+        self._ai_cache = {}
+        self._ai_cache_expiry = {}
 
     def get_ticker(self, symbol: str) -> yf.Ticker:
         """Get a ticker object with caching"""
@@ -361,6 +374,28 @@ class YahooFinanceManager:
         """Cache a result with timestamp"""
         self._result_cache[cache_key] = result
         self._result_cache_expiry[cache_key] = time.time()
+
+    def get_cached_ai_result(self, cache_key: str) -> Optional[Any]:
+        """Get cached AI result if available and not expired"""
+        now = time.time()
+        if cache_key in self._ai_cache:
+            if (
+                cache_key in self._ai_cache_expiry
+                and now - self._ai_cache_expiry[cache_key] < self.ai_cache_ttl
+            ):
+                if self.verbose_logging:
+                    print(f"💾 AI Cache HIT for {cache_key}")
+                return self._ai_cache[cache_key]
+        if self.verbose_logging:
+            print(f"🌐 AI Cache MISS for {cache_key}")
+        return None
+
+    def cache_ai_result(self, cache_key: str, result: Any):
+        """Cache an AI result with timestamp"""
+        self._ai_cache[cache_key] = result
+        self._ai_cache_expiry[cache_key] = time.time()
+        if self.verbose_logging:
+            print(f"💾 AI result cached for {cache_key}")
 
     async def get_info_with_retry(
         self, symbol: str, max_retries: int = 3
@@ -1557,8 +1592,19 @@ async def generate_stock_insights(
     """
     Generate AI-powered stock insights using GPT-4o-mini with structured output.
     Returns BUY/SELL/HOLD recommendation, price target, risk score, confidence, and justification.
+
+    Results are cached daily - the same symbol will return cached results for 24 hours.
     """
     try:
+        # Create cache key based on symbol and current date
+        from datetime import date
+        cache_key = f"ai_insights_{symbol.upper()}_{date.today().isoformat()}"
+
+        # Check cache first
+        cached_result = yahoo_manager.get_cached_ai_result(cache_key)
+        if cached_result is not None:
+            return cached_result
+
         # Fetch stock data using existing infrastructure
         ticker = yf.Ticker(symbol)
         info = await run_in_threadpool(ticker.get_info)
@@ -1623,8 +1669,8 @@ Provide a recommendation (BUY, SELL, or HOLD), a 6-12 month price target, risk s
 
         recommendation = completion.choices[0].message.parsed
 
-        # Validate and return response
-        return {
+        # Validate and prepare response
+        result = {
             "symbol": symbol,
             "recommendation": recommendation.recommendation.upper(),
             "priceTarget": recommendation.priceTarget,
@@ -1634,6 +1680,11 @@ Provide a recommendation (BUY, SELL, or HOLD), a 6-12 month price target, risk s
             "timestamp": datetime.now().isoformat(),
             "error": None,
         }
+
+        # Cache the result for 24 hours
+        yahoo_manager.cache_ai_result(cache_key, result)
+
+        return result
 
     except HTTPException:
         raise
